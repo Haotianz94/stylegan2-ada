@@ -6,7 +6,9 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-ARG BASE_IMAGE=nvcr.io/nvidia/tensorflow:20.10-tf1-py3
+#ARG BASE_IMAGE=nvcr.io/nvidia/tensorflow:20.10-tf1-py3 #require NV driver>445 
+ARG BASE_IMAGE=nvcr.io/nvidia/tensorflow:20.01-tf1-py3 #require NV driver>=440.10
+
 FROM $BASE_IMAGE
 
 RUN pip install scipy==1.3.3

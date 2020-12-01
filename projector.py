@@ -59,7 +59,7 @@ class Projector:
         if self.verbose:
             print('Projector:', *args)
 
-    def set_network(self, Gs, dtype='float16'):
+    def set_network(self, Gs, minibatch_size=1, dtype='float16'):
         if Gs is None:
             self._Gs = None
             return
@@ -94,7 +94,7 @@ class Projector:
 
         # Build image output graph.
         self._info('Building image output graph...')
-        self._minibatch_size = 1
+        self._minibatch_size = minibatch_size
         self._dlatents_var = tf.Variable(tf.zeros([self._minibatch_size] + list(self._dlatent_avg.shape[1:])), name='dlatents_var')
         self._dlatent_noise_in = tf.placeholder(tf.float32, [], name='noise_in')
         dlatents_noise = tf.random.normal(shape=self._dlatents_var.shape) * self._dlatent_noise_in
@@ -267,7 +267,7 @@ _examples = '''examples:
 
 #----------------------------------------------------------------------------
 
-def main():
+def main_origin():
     parser = argparse.ArgumentParser(
         description='Project given image to the latent space of pretrained network pickle.',
         epilog=_examples,
@@ -282,6 +282,81 @@ def main():
     project(**vars(parser.parse_args()))
 
 #----------------------------------------------------------------------------
+
+
+def main():
+
+    seed = 303
+    network_pkl = 'training-runs/00001-djokovic_fg_black_tf-mirror-paper256/network-snapshot-018022.pkl'
+    images_dir = 'datasets/djokovic_fg_black'
+    output_dir = 'result/embed_djokovic_black_18022'
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Load networks.
+    tflib.init_tf({'rnd.np_random_seed': seed})
+    print('Loading networks from "%s"...' % network_pkl)
+    with dnnlib.util.open_url(network_pkl) as fp:
+        _G, _D, Gs = pickle.load(fp)
+
+    # Initialize projector.
+    proj = Projector()
+    proj.set_network(Gs)
+
+    stride = 12
+    def check_next_exist(vid, fid, stride):
+        for i in range(1, stride):
+            if not os.path.exists('{}/{:03}_{:08}_fg.jpg'.format(images_dir, vid, fid+i)):
+                return False
+        return True
+
+    latent_codes = {}
+    has_start = False
+    next_fid = -1
+    for i, img_name in enumerate(sorted(os.listdir(images_dir))):
+        print("Embedding {}th image...".format(i))
+
+        vid, fid = img_name.split('_')[:2]
+        vid, fid = int(vid), int(fid)
+        
+        if not has_start:
+            if not check_next_exist(vid, fid, stride):
+                continue
+            else:
+                has_start = True
+                next_fid = fid + stride - 1
+        else:
+            if fid != next_fid:
+                continue
+            else:
+                if not check_next_exist(vid, fid, stride):
+                    has_start = False
+                else:
+                    next_fid = fid + stride - 1
+                    has_start = True
+
+        # Load target image.
+        target_pil = PIL.Image.open(os.path.join(images_dir, img_name))
+        target_pil= target_pil.convert('RGB')
+        target_uint8 = np.array(target_pil, dtype=np.uint8)
+        target_float = target_uint8.astype(np.float32).transpose([2, 0, 1]) * (2 / 255) - 1
+
+        proj.start([target_float])
+
+        # Run projector.
+        with tqdm.trange(proj.num_steps) as t:
+            for step in t:
+                assert step == proj.cur_step
+                dist, loss = proj.step()
+                t.set_postfix(dist=f'{dist[0]:.4f}', loss=f'{loss:.2f}')
+
+        # Save results.
+        PIL.Image.fromarray(proj.images_uint8[0], 'RGB').save(f'{output_dir}/{img_name}_embed.png')
+        latent_codes[img_name] = {'dlatents': proj.dlatents, 'is_start': has_start}
+
+        if len(latent_codes) % 1 == 0:
+            pickle.dump(latent_codes, open(f'{output_dir}/latent_codes.pkl', 'wb'))
+    pickle.dump(latent_codes, open(f'{output_dir}/latent_codes.pkl', 'wb'))
+
 
 if __name__ == "__main__":
     main()
